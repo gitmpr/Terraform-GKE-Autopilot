@@ -1,0 +1,140 @@
+name: Deploy to Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - test
+          - prod
+        default: test
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build with Maven
+        run: ./mvnw clean package -DskipTests
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.TERRAFORM_GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev
+
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG="europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images/petclinic:${{ github.sha }}"
+          docker build -t "$IMAGE_TAG" .
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Push Docker image to Artifact Registry
+        run: docker push ${{ env.IMAGE_TAG }}
+
+      - name: Get current Cloud Run revision (for rollback)
+        id: current-revision
+        run: |
+          CURRENT_REVISION=$(gcloud run services describe ${{ vars.CLOUD_RUN_SERVICE_NAME }} \
+            --region=${{ vars.GCP_REGION }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --format='value(status.latestReadyRevisionName)' || echo "none")
+          echo "revision=$CURRENT_REVISION" >> $GITHUB_OUTPUT
+          echo "Current revision: $CURRENT_REVISION"
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        run: |
+          gcloud run services update ${{ vars.CLOUD_RUN_SERVICE_NAME }} \
+            --image=${{ env.IMAGE_TAG }} \
+            --region=${{ vars.GCP_REGION }} \
+            --project=${{ vars.GCP_PROJECT_ID }}
+
+      - name: Health check on new deployment
+        id: health-check
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ vars.CLOUD_RUN_SERVICE_NAME }} \
+            --region=${{ vars.GCP_REGION }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --format='value(status.url)')
+
+          echo "Service URL: $SERVICE_URL"
+
+          # Try health check endpoint with retries
+          MAX_ATTEMPTS=5
+          ATTEMPT=1
+          SUCCESS=false
+
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "Health check attempt $ATTEMPT of $MAX_ATTEMPTS..."
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" ${SERVICE_URL}/actuator/health || echo "000")
+
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Health check passed (HTTP $HTTP_CODE)"
+              SUCCESS=true
+              break
+            else
+              echo "Health check failed (HTTP $HTTP_CODE)"
+              if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+                echo "Waiting 10 seconds before retry..."
+                sleep 10
+              fi
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+
+          if [ "$SUCCESS" = "false" ]; then
+            echo "ERROR: Health check failed after $MAX_ATTEMPTS attempts"
+            exit 1
+          fi
+
+      - name: Rollback on failure
+        if: failure() && steps.current-revision.outputs.revision != 'none'
+        run: |
+          echo "WARNING: Deployment failed, rolling back to previous revision: ${{ steps.current-revision.outputs.revision }}"
+
+          gcloud run services update-traffic ${{ vars.CLOUD_RUN_SERVICE_NAME }} \
+            --to-revisions=${{ steps.current-revision.outputs.revision }}=100 \
+            --region=${{ vars.GCP_REGION }} \
+            --project=${{ vars.GCP_PROJECT_ID }}
+
+          echo "Rolled back to revision ${{ steps.current-revision.outputs.revision }}"
+          exit 1
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          NEW_REVISION=$(gcloud run services describe ${{ vars.CLOUD_RUN_SERVICE_NAME }} \
+            --region=${{ vars.GCP_REGION }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --format='value(status.latestReadyRevisionName)')
+
+          SERVICE_URL=$(gcloud run services describe ${{ vars.CLOUD_RUN_SERVICE_NAME }} \
+            --region=${{ vars.GCP_REGION }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --format='value(status.url)')
+
+          echo "Deployment successful!"
+          echo "Environment: ${{ github.event.inputs.environment }}"
+          echo "Image: ${{ env.IMAGE_TAG }}"
+          echo "Revision: $NEW_REVISION"
+          echo "Service URL: $SERVICE_URL"
