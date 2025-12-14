@@ -46,3 +46,33 @@ out/
 _site/
 *.css
 !petclinic.css
+
+### Terraform ###
+# Local .terraform directories
+**/.terraform/*
+
+# .tfstate files contain sensitive data and should never be committed
+*.tfstate
+*.tfstate.*
+
+# Terraform plan files
+*.tfplan
+tfplan
+
+# Terraform variable files with secrets (keep *.tfvars for non-sensitive config)
+terraform.tfvars
+*.auto.tfvars
+
+# Service account keys and credentials
+terraform-gcp-sa-key.json
+*-sa-key.json
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

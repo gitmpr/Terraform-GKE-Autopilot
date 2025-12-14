@@ -56,6 +56,7 @@ gcloud services enable \
   secretmanager.googleapis.com \
   iam.googleapis.com \
   cloudresourcemanager.googleapis.com \
+  sqladmin.googleapis.com \
   --project=tf-gcp-proj-main
 
 gcloud services list --enabled --project=tf-gcp-proj-main
@@ -74,7 +75,7 @@ gcloud services enable \
 gcloud services list --enabled --project=tf-gcp-proj-test
 
 
-# Enable APIs in prod project (when ready)
+# Enable APIs in prod project
 
 gcloud services enable \
   run.googleapis.com \
@@ -83,6 +84,8 @@ gcloud services enable \
   compute.googleapis.com \
   servicenetworking.googleapis.com \
   --project=tf-gcp-proj-prod
+
+gcloud services list --enabled --project=tf-gcp-proj-prod
 
 
 # Create Terraform state bucket in main project
