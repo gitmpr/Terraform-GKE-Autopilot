@@ -1,0 +1,114 @@
+find and replace alpha in gcp project name
+
+# by default there are some GCP APIs enabled in a project, but we need some more
+
+gcloud services list --enabled
+
+gcloud services enable \
+  run.googleapis.com \
+  sqladmin.googleapis.com \
+  secretmanager.googleapis.com \
+  artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com \
+  iam.googleapis.com \
+  compute.googleapis.com \
+  servicenetworking.googleapis.com
+
+gcloud services list --enabled
+
+
+create bucket for tf-state
+regions: europe-west1
+bucket name: tf-gcp-proj-prod-alpha-tfstate
+
+gsutil mb -p tf-gcp-proj-prod-alpha -l europe-west1 gs://tf-gcp-proj-prod-alpha-tfstate
+
+enable versioning:
+gsutil versioning set on gs://tf-gcp-proj-prod-alpha-tfstate
+
+check bucket properties:
+gsutil ls -L -b gs://tf-gcp-proj-prod-alpha-tfstate
+
+create service-account for terraform
+gcloud iam service-accounts create terraform-sa \
+  --display-name="Terraform svc account" \
+  --project=tf-gcp-proj-prod-alpha
+
+# grant editor role on project
+gcloud projects add-iam-policy-binding tf-gcp-proj-prod-alpha \
+  --member="serviceAccount:terraform-sa@tf-gcp-proj-prod-alpha.iam.gserviceaccount.com" \
+  --role="roles/editor"
+
+# grant storage admin for state bucket
+gcloud projects add-iam-policy-binding tf-gcp-proj-prod-alpha \
+  --member="serviceAccount:terraform-sa@tf-gcp-proj-prod-alpha.iam.gserviceaccount.com" \
+  --role="roles/storage.admin"
+
+
+Generate Service Account Key
+
+# Create and download key
+gcloud iam service-accounts keys create ./terraform-sa-key.json \
+  --iam-account=terraform-sa@tf-gcp-proj-prod-alpha.iam.gserviceaccount.com
+
+
+store tf svc account key in secret manager, and gh repo secret, delete key file
+
+
+gh auth switch --user gitmpr
+gh secret set GCP_SA_KEY < ~/terraform-sa-key.json
+
+
+
+
+gcloud secrets create terraform-sa-key \
+  --replication-policy="automatic" \
+  --project=tf-gcp-proj-prod-alpha \
+  --labels="purpose=terraform,environment=all"
+
+gcloud secrets versions add terraform-sa-key \
+  --data-file=terraform-sa-key.json \
+  --project=tf-gcp-proj-prod-alpha
+
+
+rm ./terraform-sa-key.json
+
+create container image registry
+gcloud artifacts repositories create petclinic-images \
+    --repository-format=docker \
+    --location=europe-west1 \
+    --description="PetClinic container images" \
+    --project=tf-gcp-proj-prod-alpha
+
+
+# Verify
+gcloud artifacts repositories list --project=tf-gcp-proj-prod-alpha
+
+
+# configure local docker client to be able to directly push to artifact registry (we do this with gh actions later)
+gcloud auth configure-docker europe-west1-docker.pkg.dev
+
+
+# Create service account for Cloud Run workload
+gcloud iam service-accounts create cloudrun-petclinic-sa \
+  --display-name="Cloud Run PetClinic Service Account" \
+  --project=tf-gcp-proj-prod-alpha
+
+sleep 1
+
+# Grant Cloud SQL Client role
+gcloud projects add-iam-policy-binding tf-gcp-proj-prod-alpha \
+  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-prod-alpha.iam.gserviceaccount.com" \
+  --role="roles/cloudsql.client"
+
+# Grant Secret Manager accessor role
+gcloud projects add-iam-policy-binding tf-gcp-proj-prod-alpha \
+  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-prod-alpha.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
+
+Consider with java developers:
+For production it is could be better to use the cloud native buildpacks for automated security patches in the java application container image, but for now I will stick with the Dockerfile for simplicity in the PoC
+
+
+
