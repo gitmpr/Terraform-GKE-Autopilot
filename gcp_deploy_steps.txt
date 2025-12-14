@@ -1,114 +1,238 @@
-find and replace alpha in gcp project name
+GCP deployment steps for spring-petclinic
+multi-project setup with terraform and artifact registry in main project
 
-# by default there are some GCP APIs enabled in a project, but we need some more
+projects:
+tf-gcp-proj-main  - Shared infrastructure (Terraform state, Artifact Registry, Secrets)
+tf-gcp-proj-test  - Test environment (Cloud Run, Cloud SQL)
+tf-gcp-proj-prod       - Production environment (Cloud Run, Cloud SQL)
 
-gcloud services list --enabled
+
+# Set active Google account
+gcloud config configurations activate tf-gcp-proj-prod
+
+# Create GCP projects
+gcloud projects create tf-gcp-proj-main \
+  --name="GorillaClinic Main"
+
+gcloud projects create tf-gcp-proj-test \
+  --name="GorillaClinic Test"
+
+
+
+# Link projects to billing account
+
+gcloud billing projects link tf-gcp-proj-main \
+  --billing-account=010EE3-63FE3F-2EBCA9
+
+gcloud billing projects link tf-gcp-proj-test \
+  --billing-account=010EE3-63FE3F-2EBCA9
+
+tf-gcp-proj-prod already configured, provided
+
+
+# Enable APIs in main project (shared infrastructure)
+
+gcloud services enable \
+  storage.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com \
+  iam.googleapis.com \
+  --project=tf-gcp-proj-main
+
+gcloud services list --enabled --project=tf-gcp-proj-main
+
+
+# Enable APIs in test project
 
 gcloud services enable \
   run.googleapis.com \
   sqladmin.googleapis.com \
   secretmanager.googleapis.com \
-  artifactregistry.googleapis.com \
-  cloudbuild.googleapis.com \
-  iam.googleapis.com \
   compute.googleapis.com \
-  servicenetworking.googleapis.com
+  servicenetworking.googleapis.com \
+  --project=tf-gcp-proj-test
 
-gcloud services list --enabled
-
-
-create bucket for tf-state
-regions: europe-west1
-bucket name: tf-gcp-proj-prod-alpha-tfstate
-
-gsutil mb -p tf-gcp-proj-prod-alpha -l europe-west1 gs://tf-gcp-proj-prod-alpha-tfstate
-
-enable versioning:
-gsutil versioning set on gs://tf-gcp-proj-prod-alpha-tfstate
-
-check bucket properties:
-gsutil ls -L -b gs://tf-gcp-proj-prod-alpha-tfstate
-
-create service-account for terraform
-gcloud iam service-accounts create terraform-sa \
-  --display-name="Terraform svc account" \
-  --project=tf-gcp-proj-prod-alpha
-
-# grant editor role on project
-gcloud projects add-iam-policy-binding tf-gcp-proj-prod-alpha \
-  --member="serviceAccount:terraform-sa@tf-gcp-proj-prod-alpha.iam.gserviceaccount.com" \
-  --role="roles/editor"
-
-# grant storage admin for state bucket
-gcloud projects add-iam-policy-binding tf-gcp-proj-prod-alpha \
-  --member="serviceAccount:terraform-sa@tf-gcp-proj-prod-alpha.iam.gserviceaccount.com" \
-  --role="roles/storage.admin"
+gcloud services list --enabled --project=tf-gcp-proj-test
 
 
-Generate Service Account Key
+# Enable APIs in prod project (when ready)
 
-# Create and download key
-gcloud iam service-accounts keys create ./terraform-sa-key.json \
-  --iam-account=terraform-sa@tf-gcp-proj-prod-alpha.iam.gserviceaccount.com
-
-
-store tf svc account key in secret manager, and gh repo secret, delete key file
-
-
-gh auth switch --user gitmpr
-gh secret set GCP_SA_KEY < ~/terraform-sa-key.json
+gcloud services enable \
+  run.googleapis.com \
+  sqladmin.googleapis.com \
+  secretmanager.googleapis.com \
+  compute.googleapis.com \
+  servicenetworking.googleapis.com \
+  --project=tf-gcp-proj-prod
 
 
+# Create Terraform state bucket in main project
+
+gsutil mb -p tf-gcp-proj-main -l europe-west1 gs://tf-gcp-proj-main-tfstate
+
+gsutil versioning set on gs://tf-gcp-proj-main-tfstate
+
+gsutil ls -L -b gs://tf-gcp-proj-main-tfstate
 
 
-gcloud secrets create terraform-sa-key \
-  --replication-policy="automatic" \
-  --project=tf-gcp-proj-prod-alpha \
-  --labels="purpose=terraform,environment=all"
+# Create Artifact Registry in main project
 
-gcloud secrets versions add terraform-sa-key \
-  --data-file=terraform-sa-key.json \
-  --project=tf-gcp-proj-prod-alpha
-
-
-rm ./terraform-sa-key.json
-
-create container image registry
 gcloud artifacts repositories create petclinic-images \
-    --repository-format=docker \
-    --location=europe-west1 \
-    --description="PetClinic container images" \
-    --project=tf-gcp-proj-prod-alpha
+  --repository-format=docker \
+  --location=europe-west1 \
+  --description="PetClinic container images" \
+  --project=tf-gcp-proj-main
 
+gcloud artifacts repositories list --project=tf-gcp-proj-main
 
-# Verify
-gcloud artifacts repositories list --project=tf-gcp-proj-prod-alpha
-
-
-# configure local docker client to be able to directly push to artifact registry (we do this with gh actions later)
+# Configure local Docker to push to Artifact Registry
 gcloud auth configure-docker europe-west1-docker.pkg.dev
 
 
-# Create service account for Cloud Run workload
+# Create Terraform Service Account in main project
+
+gcloud iam service-accounts create terraform-sa \
+  --display-name="Terraform Service Account" \
+  --project=tf-gcp-proj-main
+
+
+# Grant Terraform Service Account permissions on all projects
+
+gcloud projects add-iam-policy-binding tf-gcp-proj-main \
+  --member="serviceAccount:terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com" \
+  --role="roles/editor"
+
+gcloud projects add-iam-policy-binding tf-gcp-proj-test \
+  --member="serviceAccount:terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com" \
+  --role="roles/editor"
+
+gcloud projects add-iam-policy-binding tf-gcp-proj-prod \
+  --member="serviceAccount:terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com" \
+  --role="roles/editor"
+
+
+# Generate Terraform Service Account key
+
+gcloud iam service-accounts keys create ./terraform-gcp-sa-key.json \
+  --iam-account=terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com
+
+
+# Store Terraform Service Account key in GCP Secret Manager
+
+gcloud secrets create terraform-gcp-sa-key \
+  --replication-policy="automatic" \
+  --project=tf-gcp-proj-main \
+  --labels="purpose=terraform,environment=all"
+
+gcloud secrets versions add terraform-gcp-sa-key \
+  --data-file=terraform-gcp-sa-key.json \
+  --project=tf-gcp-proj-main
+
+
+# Store Terraform Service Account key in GitHub Secret
+
+gh auth switch --user gitmpr
+gh secret set TERRAFORM_GCP_SA_KEY < ./terraform-gcp-sa-key.json
+
+
+# Create Cloud Run Service Account in test project
+
 gcloud iam service-accounts create cloudrun-petclinic-sa \
   --display-name="Cloud Run PetClinic Service Account" \
-  --project=tf-gcp-proj-prod-alpha
+  --project=tf-gcp-proj-test
 
-sleep 1
+sleep 2
 
-# Grant Cloud SQL Client role
-gcloud projects add-iam-policy-binding tf-gcp-proj-prod-alpha \
-  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-prod-alpha.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding tf-gcp-proj-test \
+  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-test.iam.gserviceaccount.com" \
   --role="roles/cloudsql.client"
 
-# Grant Secret Manager accessor role
-gcloud projects add-iam-policy-binding tf-gcp-proj-prod-alpha \
-  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-prod-alpha.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding tf-gcp-proj-test \
+  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-test.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 
 
-Consider with java developers:
-For production it is could be better to use the cloud native buildpacks for automated security patches in the java application container image, but for now I will stick with the Dockerfile for simplicity in the PoC
+# Create Cloud Run Service Account in prod project (when ready)
+
+gcloud iam service-accounts create cloudrun-petclinic-sa \
+  --display-name="Cloud Run PetClinic Service Account" \
+  --project=tf-gcp-proj-prod
+
+sleep 2
+
+gcloud projects add-iam-policy-binding tf-gcp-proj-prod \
+  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-prod.iam.gserviceaccount.com" \
+  --role="roles/cloudsql.client"
+
+gcloud projects add-iam-policy-binding tf-gcp-proj-prod \
+  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-prod.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
 
 
+# Create GitHub environments
 
+gh api repos/:owner/:repo/environments/test --method PUT
+gh api repos/:owner/:repo/environments/prod --method PUT
+
+
+# Set GitHub environment variables for test environment
+
+gh variable set GCP_PROJECT_ID --body="tf-gcp-proj-test" --env=test
+gh variable set GCP_REGION --body="europe-west1" --env=test
+gh variable set ENVIRONMENT_NAME --body="test" --env=test
+gh variable set CLOUD_RUN_SERVICE_NAME --body="petclinic-test" --env=test
+gh variable set CLOUD_SQL_INSTANCE_NAME --body="petclinic-db-test" --env=test
+gh variable set TERRAFORM_STATE_PREFIX --body="test" --env=test
+
+
+# Set GitHub environment variables for prod environment
+
+gh variable set GCP_PROJECT_ID --body="tf-gcp-proj-prod" --env=prod
+gh variable set GCP_REGION --body="europe-west1" --env=prod
+gh variable set ENVIRONMENT_NAME --body="prod" --env=prod
+gh variable set CLOUD_RUN_SERVICE_NAME --body="petclinic-prod" --env=prod
+gh variable set CLOUD_SQL_INSTANCE_NAME --body="petclinic-db-prod" --env=prod
+gh variable set TERRAFORM_STATE_PREFIX --body="prod" --env=prod
+
+
+# Verify GitHub setup
+
+gh secret list
+gh variable list --env=test
+gh variable list --env=prod
+
+
+# Infrastructure summary
+
+# Main Project (tf-gcp-proj-main):
+#   Terraform state bucket: gs://tf-gcp-proj-main-tfstate
+#   Artifact Registry: europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images
+#   Secret Manager: terraform-gcp-sa-key
+#   Service Account: terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com
+
+# Test Project (tf-gcp-proj-test):
+#   Cloud Run service: petclinic-test (to be created by Terraform)
+#   Cloud SQL instance: petclinic-db-test (to be created by Terraform)
+#   Service Account: cloudrun-petclinic-sa@tf-gcp-proj-test.iam.gserviceaccount.com
+
+# Prod Project (tf-gcp-proj-prod):
+#   Cloud Run service: petclinic-prod (to be created by Terraform)
+#   Cloud SQL instance: petclinic-db-prod (to be created by Terraform)
+#   Service Account: cloudrun-petclinic-sa@tf-gcp-proj-prod.iam.gserviceaccount.com
+
+
+# Docker image tags
+# Primary tag: europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images/petclinic:<git-sha>
+# Add additional tags via: gcloud artifacts docker tags add SOURCE-IMAGE TARGET-IMAGE
+
+
+# Terraform workspaces
+# test workspace deploys to tf-gcp-proj-test project
+# prod workspace deploys to tf-gcp-proj-prod project
+
+
+# Note on container build strategy
+# Consider with Java developers: For production it could be better to use the
+# cloud native buildpacks for automated security patches in the Java application
+# container image, but for now we will stick with the Dockerfile for simplicity
+# in the PoC.
