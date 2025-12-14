@@ -7,6 +7,18 @@ tf-gcp-proj-test  - Test environment (Cloud Run, Cloud SQL)
 tf-gcp-proj-prod       - Production environment (Cloud Run, Cloud SQL)
 
 
+# Prerequisites
+
+Required tools:
+- gcloud CLI (authenticated with your GCP account)
+- gh CLI (authenticated with GitHub - run: gh auth login)
+- Docker
+- Terraform >= 1.5
+
+# Find your billing account ID
+gcloud billing accounts list
+
+
 # Set active Google account
 gcloud config configurations activate tf-gcp-proj-prod
 
@@ -17,17 +29,23 @@ gcloud projects create tf-gcp-proj-main \
 gcloud projects create tf-gcp-proj-test \
   --name="GorillaClinic Test"
 
+# gcloud projects create tf-gcp-proj-prod \
+#   --name="GorillaClinic Prod"
+# (tf-gcp-proj-prod project was already provided for this setup)
+
 
 
 # Link projects to billing account
+# Replace BILLING_ACCOUNT_ID with your billing account ID from the list above
 
 gcloud billing projects link tf-gcp-proj-main \
-  --billing-account=010EE3-63FE3F-2EBCA9
+  --billing-account=BILLING_ACCOUNT_ID
 
 gcloud billing projects link tf-gcp-proj-test \
-  --billing-account=010EE3-63FE3F-2EBCA9
+  --billing-account=BILLING_ACCOUNT_ID
 
-tf-gcp-proj-prod already configured, provided
+gcloud billing projects link tf-gcp-proj-prod \
+  --billing-account=BILLING_ACCOUNT_ID
 
 
 # Enable APIs in main project (shared infrastructure)
@@ -37,6 +55,7 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   secretmanager.googleapis.com \
   iam.googleapis.com \
+  cloudresourcemanager.googleapis.com \
   --project=tf-gcp-proj-main
 
 gcloud services list --enabled --project=tf-gcp-proj-main
@@ -75,15 +94,9 @@ gsutil versioning set on gs://tf-gcp-proj-main-tfstate
 gsutil ls -L -b gs://tf-gcp-proj-main-tfstate
 
 
-# Create Artifact Registry in main project
-
-gcloud artifacts repositories create petclinic-images \
-  --repository-format=docker \
-  --location=europe-west1 \
-  --description="PetClinic container images" \
-  --project=tf-gcp-proj-main
-
-gcloud artifacts repositories list --project=tf-gcp-proj-main
+# Artifact Registry and cross-project IAM are managed by Terraform
+# See terraform/shared-infrastructure.tf and terraform/artifact-registry-iam.tf
+# Terraform will create the registry and configure permissions automatically
 
 # Configure local Docker to push to Artifact Registry
 gcloud auth configure-docker europe-west1-docker.pkg.dev
@@ -97,18 +110,29 @@ gcloud iam service-accounts create terraform-sa \
 
 
 # Grant Terraform Service Account permissions on all projects
+# For PoC: Using Owner role for simplicity
+# For Production: Use least-privilege roles (see note below)
 
 gcloud projects add-iam-policy-binding tf-gcp-proj-main \
   --member="serviceAccount:terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com" \
-  --role="roles/editor"
+  --role="roles/owner"
 
 gcloud projects add-iam-policy-binding tf-gcp-proj-test \
   --member="serviceAccount:terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com" \
-  --role="roles/editor"
+  --role="roles/owner"
 
 gcloud projects add-iam-policy-binding tf-gcp-proj-prod \
   --member="serviceAccount:terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com" \
-  --role="roles/editor"
+  --role="roles/owner"
+
+# Production Note: Least-privilege roles for Terraform SA
+# Instead of Owner, grant these specific roles:
+# - roles/editor (base permissions)
+# - roles/artifactregistry.admin (manage Artifact Registry IAM)
+# - roles/run.admin (manage Cloud Run IAM)
+# - roles/cloudsql.admin (manage Cloud SQL)
+# - roles/compute.admin (manage GKE/networking)
+# - roles/iam.serviceAccountAdmin (manage service accounts)
 
 
 # Generate Terraform Service Account key
@@ -202,22 +226,59 @@ gh variable list --env=test
 gh variable list --env=prod
 
 
+# Initialize and test Terraform deployment
+
+cd terraform
+terraform init
+
+# Create Terraform workspaces for test and prod environments
+terraform workspace new test
+terraform workspace new prod
+terraform workspace select test
+terraform workspace list
+
+# Plan and apply for test environment
+terraform plan -var-file=vars/test/env.tfvars
+terraform apply -var-file=vars/test/env.tfvars
+
+
+# Build and push Docker image
+# (This will be automated in GitHub Actions later)
+
+# Optional: Test locally first with resource constraints matching Cloud Run
+# docker build -t petclinic-test .
+# docker run --rm -p 8080:8080 --cpus="1" --memory="512m" petclinic-test
+
+# Build and push to Artifact Registry (created by Terraform above)
+cd ..
+docker build -t europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images/petclinic:latest .
+docker push europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images/petclinic:latest
+
+
+# Note on service account key file
+# For PoC convenience, we keep terraform-gcp-sa-key.json in the repo root
+# For production, this should be retrieved from Secret Manager and deleted after use
+
+
 # Infrastructure summary
 
 # Main Project (tf-gcp-proj-main):
 #   Terraform state bucket: gs://tf-gcp-proj-main-tfstate
-#   Artifact Registry: europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images
+#   Artifact Registry: europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images (Terraform-managed)
 #   Secret Manager: terraform-gcp-sa-key
-#   Service Account: terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com
+#   Terraform Service Account: terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com (Owner role)
 
 # Test Project (tf-gcp-proj-test):
-#   Cloud Run service: petclinic-test (to be created by Terraform)
-#   Cloud SQL instance: petclinic-db-test (to be created by Terraform)
+#   Cloud Run service: petclinic-test (deployed)
+#   Service URL: https://petclinic-test-lfikytfcma-ew.a.run.app
+#   Resources: 1 CPU, 512Mi RAM, 0-10 instances
+#   Database: H2 in-memory
+#   Cloud SQL instance: petclinic-db-test (not yet deployed)
 #   Service Account: cloudrun-petclinic-sa@tf-gcp-proj-test.iam.gserviceaccount.com
 
 # Prod Project (tf-gcp-proj-prod):
-#   Cloud Run service: petclinic-prod (to be created by Terraform)
-#   Cloud SQL instance: petclinic-db-prod (to be created by Terraform)
+#   Cloud Run service: petclinic-prod (not yet deployed)
+#   Cloud SQL instance: petclinic-db-prod (not yet deployed)
 #   Service Account: cloudrun-petclinic-sa@tf-gcp-proj-prod.iam.gserviceaccount.com
 
 
