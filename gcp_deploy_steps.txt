@@ -162,38 +162,13 @@ gh auth switch --user gitmpr
 gh secret set TERRAFORM_GCP_SA_KEY < ./terraform-gcp-sa-key.json
 
 
-# Create Cloud Run Service Account in test project
-
-gcloud iam service-accounts create cloudrun-petclinic-sa \
-  --display-name="Cloud Run PetClinic Service Account" \
-  --project=tf-gcp-proj-test
-
-sleep 2
-
-gcloud projects add-iam-policy-binding tf-gcp-proj-test \
-  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-test.iam.gserviceaccount.com" \
-  --role="roles/cloudsql.client"
-
-gcloud projects add-iam-policy-binding tf-gcp-proj-test \
-  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-test.iam.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
-
-
-# Create Cloud Run Service Account in prod project (when ready)
-
-gcloud iam service-accounts create cloudrun-petclinic-sa \
-  --display-name="Cloud Run PetClinic Service Account" \
-  --project=tf-gcp-proj-prod
-
-sleep 2
-
-gcloud projects add-iam-policy-binding tf-gcp-proj-prod \
-  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-prod.iam.gserviceaccount.com" \
-  --role="roles/cloudsql.client"
-
-gcloud projects add-iam-policy-binding tf-gcp-proj-prod \
-  --member="serviceAccount:cloudrun-petclinic-sa@tf-gcp-proj-prod.iam.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
+# Cloud Run Service Accounts are now managed by Terraform
+# See terraform/service-accounts.tf for the service account configuration
+# Terraform will automatically create:
+#   - Cloud Run workload service account (cloudrun-petclinic-sa)
+#   - IAM bindings for cloudsql.client role
+#   - IAM bindings for secretmanager.secretAccessor role
+# These are created automatically when you run terraform apply in test/prod workspaces
 
 
 # Create GitHub environments
@@ -275,14 +250,19 @@ docker push europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images/petcli
 #   Cloud Run service: petclinic-test (deployed)
 #   Service URL: https://petclinic-test-lfikytfcma-ew.a.run.app
 #   Resources: 1 CPU, 512Mi RAM, 0-10 instances
-#   Database: H2 in-memory
-#   Cloud SQL instance: petclinic-db-test (not yet deployed)
-#   Service Account: cloudrun-petclinic-sa@tf-gcp-proj-test.iam.gserviceaccount.com
+#   Database: Cloud SQL PostgreSQL (ZONAL)
+#   Cloud SQL instance: petclinic-db-test (deployed)
+#   Cloud SQL connection: tf-gcp-proj-test:europe-west1:petclinic-db-test
+#   Service Account: cloudrun-petclinic-sa@tf-gcp-proj-test.iam.gserviceaccount.com (Terraform-managed)
 
 # Prod Project (tf-gcp-proj-prod):
-#   Cloud Run service: petclinic-prod (not yet deployed)
-#   Cloud SQL instance: petclinic-db-prod (not yet deployed)
-#   Service Account: cloudrun-petclinic-sa@tf-gcp-proj-prod.iam.gserviceaccount.com
+#   Cloud Run service: petclinic-prod (deployed)
+#   Service URL: https://petclinic-prod-zdihkaopnq-ew.a.run.app
+#   Resources: 2 CPU, 1Gi RAM, 1-100 instances
+#   Database: Cloud SQL PostgreSQL (REGIONAL - high availability)
+#   Cloud SQL instance: petclinic-db-prod (deployed)
+#   Cloud SQL connection: tf-gcp-proj-prod:europe-west1:petclinic-db-prod
+#   Service Account: cloudrun-petclinic-sa@tf-gcp-proj-prod.iam.gserviceaccount.com (Terraform-managed)
 
 
 # Docker image tags

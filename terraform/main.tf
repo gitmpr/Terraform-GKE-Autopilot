@@ -1,10 +1,11 @@
 resource "google_cloud_run_v2_service" "petclinic" {
+  for_each = terraform.workspace != "main" ? toset(["this"]) : toset([])
   name     = "petclinic-${var.environment_name}"
   location = var.gcp_region
   project  = var.gcp_project_id
 
   template {
-    service_account = var.service_account_email
+    service_account = google_service_account.cloudrun_petclinic["this"].email
 
     scaling {
       min_instance_count = var.min_instances
@@ -15,7 +16,7 @@ resource "google_cloud_run_v2_service" "petclinic" {
     volumes {
       name = "cloudsql"
       cloud_sql_instance {
-        instances = [google_sql_database_instance.petclinic.connection_name]
+        instances = [google_sql_database_instance.petclinic["this"].connection_name]
       }
     }
 
@@ -47,19 +48,19 @@ resource "google_cloud_run_v2_service" "petclinic" {
 
       env {
         name  = "SPRING_DATASOURCE_URL"
-        value = "jdbc:postgresql:///${google_sql_database.petclinic.name}?cloudSqlInstance=${google_sql_database_instance.petclinic.connection_name}&socketFactory=com.google.cloud.sql.postgres.SocketFactory"
+        value = "jdbc:postgresql:///${google_sql_database.petclinic["this"].name}?cloudSqlInstance=${google_sql_database_instance.petclinic["this"].connection_name}&socketFactory=com.google.cloud.sql.postgres.SocketFactory"
       }
 
       env {
         name  = "SPRING_DATASOURCE_USERNAME"
-        value = google_sql_user.petclinic.name
+        value = google_sql_user.petclinic["this"].name
       }
 
       env {
         name = "SPRING_DATASOURCE_PASSWORD"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.db_password.secret_id
+            secret  = google_secret_manager_secret.db_password["this"].secret_id
             version = "latest"
           }
         }
@@ -75,11 +76,11 @@ resource "google_cloud_run_v2_service" "petclinic" {
 
 # Allow unauthenticated access (for MVP)
 resource "google_cloud_run_v2_service_iam_member" "noauth" {
-  count = var.allow_unauthenticated ? 1 : 0
+  for_each = var.allow_unauthenticated && terraform.workspace != "main" ? toset(["this"]) : toset([])
 
-  project  = google_cloud_run_v2_service.petclinic.project
-  location = google_cloud_run_v2_service.petclinic.location
-  name     = google_cloud_run_v2_service.petclinic.name
+  project  = google_cloud_run_v2_service.petclinic["this"].project
+  location = google_cloud_run_v2_service.petclinic["this"].location
+  name     = google_cloud_run_v2_service.petclinic["this"].name
   role     = "roles/run.invoker"
   member   = "allUsers"
 }

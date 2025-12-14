@@ -9,3 +9,4 @@ min_instances         = 1
 cpu_limit             = "2"
 memory_limit          = "1Gi"
 allow_unauthenticated = true
+sql_availability_type = "REGIONAL"

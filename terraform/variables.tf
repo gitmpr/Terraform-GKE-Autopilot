@@ -53,3 +53,9 @@ variable "allow_unauthenticated" {
   type        = bool
   default     = true
 }
+
+variable "sql_availability_type" {
+  description = "Availability type for Cloud SQL instance (ZONAL or REGIONAL)"
+  type        = string
+  default     = "ZONAL"
+}
