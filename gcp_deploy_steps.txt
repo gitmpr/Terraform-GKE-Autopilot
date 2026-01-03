@@ -1,10 +1,10 @@
 GCP deployment steps for spring-petclinic
-multi-project setup with terraform and artifact registry in main project
+multi-project setup with terraform stacks and GKE Autopilot
 
 projects:
 tf-gcp-proj-main  - Shared infrastructure (Terraform state, Artifact Registry, Secrets)
-tf-gcp-proj-test  - Test environment (Cloud Run, Cloud SQL)
-tf-gcp-proj-prod       - Production environment (Cloud Run, Cloud SQL)
+tf-gcp-proj-test  - Test environment (GKE Autopilot, Cloud SQL)
+tf-gcp-proj-prod       - Production environment (GKE Autopilot, Cloud SQL)
 
 
 # Prerequisites
@@ -12,6 +12,7 @@ tf-gcp-proj-prod       - Production environment (Cloud Run, Cloud SQL)
 Required tools:
 - gcloud CLI (authenticated with your GCP account)
 - gh CLI (authenticated with GitHub - run: gh auth login)
+- kubectl (for Kubernetes cluster management)
 - Docker
 - Terraform >= 1.5
 
@@ -56,7 +57,6 @@ gcloud services enable \
   secretmanager.googleapis.com \
   iam.googleapis.com \
   cloudresourcemanager.googleapis.com \
-  sqladmin.googleapis.com \
   --project=tf-gcp-proj-main
 
 gcloud services list --enabled --project=tf-gcp-proj-main
@@ -65,7 +65,7 @@ gcloud services list --enabled --project=tf-gcp-proj-main
 # Enable APIs in test project
 
 gcloud services enable \
-  run.googleapis.com \
+  container.googleapis.com \
   sqladmin.googleapis.com \
   secretmanager.googleapis.com \
   compute.googleapis.com \
@@ -78,7 +78,7 @@ gcloud services list --enabled --project=tf-gcp-proj-test
 # Enable APIs in prod project
 
 gcloud services enable \
-  run.googleapis.com \
+  container.googleapis.com \
   sqladmin.googleapis.com \
   secretmanager.googleapis.com \
   compute.googleapis.com \
@@ -96,10 +96,6 @@ gsutil versioning set on gs://tf-gcp-proj-main-tfstate
 
 gsutil ls -L -b gs://tf-gcp-proj-main-tfstate
 
-
-# Artifact Registry and cross-project IAM are managed by Terraform
-# See terraform/shared-infrastructure.tf and terraform/artifact-registry-iam.tf
-# Terraform will create the registry and configure permissions automatically
 
 # Configure local Docker to push to Artifact Registry
 gcloud auth configure-docker europe-west1-docker.pkg.dev
@@ -131,10 +127,10 @@ gcloud projects add-iam-policy-binding tf-gcp-proj-prod \
 # Production Note: Least-privilege roles for Terraform SA
 # Instead of Owner, grant these specific roles:
 # - roles/editor (base permissions)
-# - roles/artifactregistry.admin (manage Artifact Registry IAM)
-# - roles/run.admin (manage Cloud Run IAM)
+# - roles/artifactregistry.admin (manage Artifact Registry)
+# - roles/container.admin (manage GKE)
 # - roles/cloudsql.admin (manage Cloud SQL)
-# - roles/compute.admin (manage GKE/networking)
+# - roles/compute.admin (manage VPC networking)
 # - roles/iam.serviceAccountAdmin (manage service accounts)
 
 
@@ -162,107 +158,130 @@ gh auth switch --user gitmpr
 gh secret set TERRAFORM_GCP_SA_KEY < ./terraform-gcp-sa-key.json
 
 
-# Cloud Run Service Accounts are now managed by Terraform
-# See terraform/service-accounts.tf for the service account configuration
-# Terraform will automatically create:
-#   - Cloud Run workload service account (cloudrun-petclinic-sa)
-#   - IAM bindings for cloudsql.client role
-#   - IAM bindings for secretmanager.secretAccessor role
-# These are created automatically when you run terraform apply in test/prod workspaces
+# Deploy shared infrastructure stack
+# This creates the Artifact Registry for container images
 
+cd terraform/stacks/shared
 
-# Create GitHub environments
-
-gh api repos/:owner/:repo/environments/test --method PUT
-gh api repos/:owner/:repo/environments/prod --method PUT
-
-
-# Set GitHub environment variables for test environment
-
-gh variable set GCP_PROJECT_ID --body="tf-gcp-proj-test" --env=test
-gh variable set GCP_REGION --body="europe-west1" --env=test
-gh variable set ENVIRONMENT_NAME --body="test" --env=test
-gh variable set CLOUD_RUN_SERVICE_NAME --body="petclinic-test" --env=test
-gh variable set CLOUD_SQL_INSTANCE_NAME --body="petclinic-db-test" --env=test
-gh variable set TERRAFORM_STATE_PREFIX --body="test" --env=test
-
-
-# Set GitHub environment variables for prod environment
-
-gh variable set GCP_PROJECT_ID --body="tf-gcp-proj-prod" --env=prod
-gh variable set GCP_REGION --body="europe-west1" --env=prod
-gh variable set ENVIRONMENT_NAME --body="prod" --env=prod
-gh variable set CLOUD_RUN_SERVICE_NAME --body="petclinic-prod" --env=prod
-gh variable set CLOUD_SQL_INSTANCE_NAME --body="petclinic-db-prod" --env=prod
-gh variable set TERRAFORM_STATE_PREFIX --body="prod" --env=prod
-
-
-# Verify GitHub setup
-
-gh secret list
-gh variable list --env=test
-gh variable list --env=prod
-
-
-# Initialize and test Terraform deployment
-
-cd terraform
 terraform init
+terraform plan
+terraform apply
 
-# Create Terraform workspaces for test and prod environments
+cd ../../..
+
+
+# Deploy test environment stack
+# This creates: VPC, GKE Autopilot cluster, Cloud SQL PostgreSQL, Service Accounts
+
+gcloud config configurations activate tf-gcp-proj-test
+
+cd terraform/stacks/env
+
+terraform init
 terraform workspace new test
-terraform workspace new prod
 terraform workspace select test
-terraform workspace list
+terraform plan -var-file=env.d/test.tfvars
+terraform apply -var-file=env.d/test.tfvars
 
-# Plan and apply for test environment
-terraform plan -var-file=vars/test/env.tfvars
-terraform apply -var-file=vars/test/env.tfvars
+cd ../../..
+
+
+# Deploy prod environment stack
+# This creates: VPC, GKE Autopilot cluster, Cloud SQL PostgreSQL, Service Accounts
+
+gcloud config configurations activate tf-gcp-proj-prod
+
+cd terraform/stacks/env
+
+terraform workspace new prod
+terraform workspace select prod
+terraform plan -var-file=env.d/prod.tfvars
+terraform apply -var-file=env.d/prod.tfvars
+
+cd ../../..
+
+
+# Configure kubectl to access GKE clusters
+
+# For test cluster
+gcloud config configurations activate tf-gcp-proj-test
+gcloud container clusters get-credentials gorillaclinic-k8s-gke-test \
+  --region=europe-west1 \
+  --project=tf-gcp-proj-test
+
+# For prod cluster
+gcloud config configurations activate tf-gcp-proj-prod
+gcloud container clusters get-credentials gorillaclinic-k8s-gke-prod \
+  --region=europe-west1 \
+  --project=tf-gcp-proj-prod
 
 
 # Build and push Docker image
 # (This will be automated in GitHub Actions later)
 
-# Optional: Test locally first with resource constraints matching Cloud Run
+# Optional: Test locally first with resource constraints
 # docker build -t petclinic-test .
 # docker run --rm -p 8080:8080 --cpus="1" --memory="512m" petclinic-test
 
-# Build and push to Artifact Registry (created by Terraform above)
-cd ..
+# Build and push to Artifact Registry (created by Terraform shared stack)
 docker build -t europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images/petclinic:latest .
 docker push europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images/petclinic:latest
 
 
 # Note on service account key file
 # For PoC convenience, we keep terraform-gcp-sa-key.json in the repo root
-# For production, this should be retrieved from Secret Manager and deleted after use
+# For production, use Workload Identity Federation for GitHub Actions
+# TODO: Remove service account key references from terraform code
 
 
 # Infrastructure summary
 
 # Main Project (tf-gcp-proj-main):
 #   Terraform state bucket: gs://tf-gcp-proj-main-tfstate
-#   Artifact Registry: europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images (Terraform-managed)
+#   State files:
+#     - shared/default.tfstate (shared infrastructure)
+#     - env/env:test/default.tfstate (test environment workspace)
+#     - env/env:prod/default.tfstate (prod environment workspace)
+#   Artifact Registry: europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images
 #   Secret Manager: terraform-gcp-sa-key
 #   Terraform Service Account: terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com (Owner role)
 
 # Test Project (tf-gcp-proj-test):
-#   Cloud Run service: petclinic-test (deployed)
-#   Service URL: https://petclinic-test-lfikytfcma-ew.a.run.app
-#   Resources: 1 CPU, 512Mi RAM, 0-10 instances
-#   Database: Cloud SQL PostgreSQL (ZONAL)
-#   Cloud SQL instance: petclinic-db-test (deployed)
-#   Cloud SQL connection: tf-gcp-proj-test:europe-west1:petclinic-db-test
-#   Service Account: cloudrun-petclinic-sa@tf-gcp-proj-test.iam.gserviceaccount.com (Terraform-managed)
+#   GKE Autopilot cluster: gorillaclinic-k8s-gke-test
+#   Region: europe-west1
+#   VPC: petclinic-vpc-test
+#   Database: Cloud SQL PostgreSQL (ZONAL, db-f1-micro)
+#   Cloud SQL instance: petclinic-db-test (private IP only)
+#   Cloud SQL database: petclinic
+#   Service Account: petclinic-app-test@tf-gcp-proj-test.iam.gserviceaccount.com
+#   Permissions: cloudsql.client, secretmanager.secretAccessor
 
 # Prod Project (tf-gcp-proj-prod):
-#   Cloud Run service: petclinic-prod (deployed)
-#   Service URL: https://petclinic-prod-zdihkaopnq-ew.a.run.app
-#   Resources: 2 CPU, 1Gi RAM, 1-100 instances
-#   Database: Cloud SQL PostgreSQL (REGIONAL - high availability)
-#   Cloud SQL instance: petclinic-db-prod (deployed)
-#   Cloud SQL connection: tf-gcp-proj-prod:europe-west1:petclinic-db-prod
-#   Service Account: cloudrun-petclinic-sa@tf-gcp-proj-prod.iam.gserviceaccount.com (Terraform-managed)
+#   GKE Autopilot cluster: gorillaclinic-k8s-gke-prod
+#   Region: europe-west1
+#   VPC: petclinic-vpc-prod
+#   Database: Cloud SQL PostgreSQL (REGIONAL, db-custom-2-7680)
+#   Cloud SQL instance: petclinic-db-prod (private IP only)
+#   Cloud SQL database: petclinic
+#   Service Account: petclinic-app-prod@tf-gcp-proj-prod.iam.gserviceaccount.com
+#   Permissions: cloudsql.client, secretmanager.secretAccessor
+
+
+# Terraform stack architecture
+
+# terraform/stacks/shared/
+#   Purpose: Shared infrastructure across all environments
+#   Resources: Artifact Registry
+#   State: gs://tf-gcp-proj-main-tfstate/shared/
+#   Project: tf-gcp-proj-main
+
+# terraform/stacks/env/
+#   Purpose: Environment-specific GKE and Cloud SQL infrastructure
+#   Resources: VPC, GKE Autopilot, Cloud SQL, Service Accounts
+#   State: gs://tf-gcp-proj-main-tfstate/env/env:{workspace}/
+#   Workspaces: test, prod
+#   Projects: tf-gcp-proj-test (test workspace), tf-gcp-proj-prod (prod workspace)
+#   Config files: env.d/test.tfvars, env.d/prod.tfvars
 
 
 # Docker image tags
@@ -270,13 +289,8 @@ docker push europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images/petcli
 # Add additional tags via: gcloud artifacts docker tags add SOURCE-IMAGE TARGET-IMAGE
 
 
-# Terraform workspaces
-# test workspace deploys to tf-gcp-proj-test project
-# prod workspace deploys to tf-gcp-proj-prod project
-
-
-# Note on container build strategy
-# Consider with Java developers: For production it could be better to use the
-# cloud native buildpacks for automated security patches in the Java application
-# container image, but for now we will stick with the Dockerfile for simplicity
-# in the PoC.
+# Next steps
+# - Create Kubernetes manifests for deploying petclinic application to GKE
+# - Set up Workload Identity binding between Kubernetes service account and GCP service account
+# - Configure Cloud SQL Proxy or Private Service Connect for database access from pods
+# - Create GitHub Actions workflows for automated deployments
