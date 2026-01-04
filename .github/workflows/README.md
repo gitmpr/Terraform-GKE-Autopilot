@@ -38,19 +38,38 @@ This directory contains CI/CD workflows for the PetClinic application.
 - Deploy specific version to prod: Run with `environment=prod`, `image_tag=abc123`
 - Rollback: Run with `environment=prod`, `image_tag=<previous-working-sha>`
 
+### Deploy to Cloud Run (`deploy-cloud-run.yml`) - DEPRECATED
+
+**Status:** Non-functional after OIDC migration (2026-01-04)
+
+**Reason:** This workflow relied on the `TERRAFORM_GCP_SA_KEY` secret which has been removed for security reasons. The project has migrated to GKE, making Cloud Run deployment legacy infrastructure.
+
+**Note:** This file is kept for reference only. For current deployments, use the GKE workflow above.
+
 ## Secrets Required
 
-The workflows require the following GitHub secret:
+The workflows require the following GitHub secrets:
 
-### `TERRAFORM_GCP_SA_KEY`
-- **Description:** GCP service account key for Terraform SA
+### `WIF_PROVIDER`
+- **Description:** Workload Identity Federation provider resource name
+- **Used for:** Authenticating GitHub Actions to Google Cloud via OIDC
+- **Format:** `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions/providers/github-provider`
+- **Setup:** Created during Workload Identity Federation configuration
+
+### `WIF_SERVICE_ACCOUNT`
+- **Description:** GCP service account email for CI/CD operations
+- **Value:** `terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com`
 - **Used for:**
   - Authenticating to Google Cloud
   - Pushing Docker images to Artifact Registry
   - Accessing Secret Manager
   - Configuring kubectl for GKE clusters
-- **Format:** JSON key file content
-- **Already configured:** Yes (set up during initial infrastructure deployment)
+- **Permissions:** Owner role on all three projects (main, test, prod)
+
+### ~~`TERRAFORM_GCP_SA_KEY`~~ (DEPRECATED - Removed 2026-01-04)
+- **Status:** Replaced with OIDC authentication via Workload Identity Federation
+- **Migration:** Service account key removed from GitHub secrets for improved security
+- **See:** `WORKLOAD_IDENTITY_FEDERATION.md` for details on the new authentication method
 
 ## GitHub Environments (Optional)
 
@@ -167,8 +186,9 @@ kubectl logs -l app=petclinic -c cloud-sql-proxy --tail=100
 
 1. **Add build caching** - Use Docker layer caching or kaniko for faster builds
 2. **Add integration tests** - Run tests before deployment
-3. **Blue/green deployments** - Use Argo Rollouts for zero-downtime deployments
-4. **Canary deployments** - Gradually roll out to subset of users
-5. **Rollback automation** - Auto-rollback on health check failure
-6. **Slack notifications** - Notify team of deployments and failures
-7. **Workload Identity Federation** - Remove service account key, use OIDC instead
+3. ~~**Workload Identity Federation** - Remove service account key, use OIDC instead~~ ✅ **COMPLETED (2026-01-04)**
+4. **Blue/green deployments** - Use Argo Rollouts for zero-downtime deployments
+5. **Canary deployments** - Gradually roll out to subset of users
+6. **Rollback automation** - Auto-rollback on health check failure
+7. **Slack notifications** - Notify team of deployments and failures
+8. **Kubernetes API OIDC** - Configure GKE to use OIDC for kubectl access (separate from CI/CD OIDC)

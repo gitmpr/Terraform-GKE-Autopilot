@@ -1,3 +1,14 @@
+# ============================================================================
+# DEPRECATED: Non-functional after OIDC migration (2026-01-04)
+#
+# Status: Legacy Cloud Run deployment (project migrated to GKE)
+# Reason: Service account key removed in favor of OIDC authentication
+# Impact: This workflow will fail due to missing TERRAFORM_GCP_SA_KEY secret
+#
+# This file is kept for reference only.
+# For current deployments, see: .github/workflows/deploy-application.yml
+# ============================================================================
+
 name: Deploy to Cloud Run
 
 on:
