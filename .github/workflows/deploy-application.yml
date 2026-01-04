@@ -75,19 +75,16 @@ jobs:
           username: 'oauth2accesstoken'
           password: ${{ steps.auth.outputs.access_token }}
 
-      - name: Build Docker image
-        run: |
-          docker build -t ${{ steps.set-tag.outputs.full }} .
-
-      - name: Push Docker image
-        run: |
-          docker push ${{ steps.set-tag.outputs.full }}
-
-      - name: Tag as latest
-        run: |
-          gcloud artifacts docker tags add \
-            ${{ steps.set-tag.outputs.full }} \
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.set-tag.outputs.full }}
             ${{ env.REGISTRY }}/${{ env.REGISTRY_PROJECT }}/${{ env.REGISTRY_REPO }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy-to-gke:
     name: Deploy to GKE (${{ inputs.environment }})
