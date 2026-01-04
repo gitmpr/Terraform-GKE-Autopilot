@@ -92,17 +92,18 @@ jobs:
       - name: Set environment variables
         id: set-env
         run: |
-          if [ "${{ inputs.environment }}" = "test" ]; then
-            echo "project=tf-gcp-proj-test" >> $GITHUB_OUTPUT
-            echo "cluster=gorillaclinic-k8s-gke-test" >> $GITHUB_OUTPUT
-            echo "namespace=petclinic-test" >> $GITHUB_OUTPUT
-            echo "db_secret=petclinic-db-password-test" >> $GITHUB_OUTPUT
+          ENVIRONMENT="${{ inputs.environment }}"
+
+          if [ "$ENVIRONMENT" = "test" ]; then
+            PROJECT="tf-gcp-proj-test"
           else
-            echo "project=tf-gcp-proj-prod" >> $GITHUB_OUTPUT
-            echo "cluster=gorillaclinic-k8s-gke-prod" >> $GITHUB_OUTPUT
-            echo "namespace=petclinic-prod" >> $GITHUB_OUTPUT
-            echo "db_secret=petclinic-db-password-prod" >> $GITHUB_OUTPUT
+            PROJECT="tf-gcp-proj-prod"
           fi
+
+          echo "project=${PROJECT}" >> $GITHUB_OUTPUT
+          echo "cluster=gorillaclinic-k8s-gke-${ENVIRONMENT}" >> $GITHUB_OUTPUT
+          echo "namespace=petclinic-${ENVIRONMENT}" >> $GITHUB_OUTPUT
+          echo "db_secret=petclinic-db-password-${ENVIRONMENT}" >> $GITHUB_OUTPUT
           echo "region=europe-west1" >> $GITHUB_OUTPUT
 
       - name: Authenticate to Google Cloud
