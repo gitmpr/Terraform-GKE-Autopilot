@@ -178,18 +178,41 @@ jobs:
 
       - name: Health check
         run: |
-          GATEWAY_IP=$(kubectl get gateway petclinic-gateway -n ${{ steps.set-env.outputs.namespace }} -o jsonpath='{.status.addresses[0].value}')
-
-          # Wait up to 7.5 minutes for application to be healthy
-          # (measured 6 minutes needed, plus 25% buffer)
-          for i in {1..90}; do
-            if curl -f -s -o /dev/null http://$GATEWAY_IP; then
-              echo "Application is healthy and responding"
-              exit 0
+          # Wait for gateway to get an IP address (up to 2 minutes)
+          echo "Waiting for gateway IP assignment..."
+          for i in {1..24}; do
+            GATEWAY_IP=$(kubectl get gateway petclinic-gateway -n ${{ steps.set-env.outputs.namespace }} -o jsonpath='{.status.addresses[0].value}' 2>/dev/null)
+            if [ -n "$GATEWAY_IP" ]; then
+              echo "Gateway IP assigned: $GATEWAY_IP"
+              break
             fi
-            echo "Waiting for application to be healthy... ($i/90)"
+            echo "Waiting for gateway IP... ($i/24)"
             sleep 5
           done
 
-          echo "Application health check timed out"
+          if [ -z "$GATEWAY_IP" ]; then
+            echo "ERROR: Gateway IP was not assigned after 2 minutes"
+            kubectl get gateway petclinic-gateway -n ${{ steps.set-env.outputs.namespace }} -o yaml
+            exit 1
+          fi
+
+          echo "Testing connectivity to: http://$GATEWAY_IP/"
+
+          # Wait up to 10 minutes for application to be healthy
+          for i in {1..120}; do
+            if curl -f -s -o /dev/null --max-time 5 http://$GATEWAY_IP; then
+              echo "Application is healthy and responding after $((i * 5)) seconds"
+              exit 0
+            fi
+            if [ $i -eq 1 ] || [ $((i % 20)) -eq 0 ]; then
+              echo "Attempt $i/120 failed. Verbose output:"
+              curl -v --max-time 5 http://$GATEWAY_IP 2>&1 | head -15
+            fi
+            echo "Waiting for application to be healthy... ($i/120)"
+            sleep 5
+          done
+
+          echo "Application health check timed out after 10 minutes"
+          echo "Final verbose attempt:"
+          curl -v --max-time 5 http://$GATEWAY_IP
           exit 1
