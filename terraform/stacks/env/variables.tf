@@ -26,6 +26,12 @@ variable "container_image" {
   default     = "europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images/petclinic:latest"
 }
 
+variable "artifact_registry_name" {
+  description = "Artifact Registry repository name"
+  type        = string
+  default     = "petclinic-images"
+}
+
 # GKE configuration
 variable "gke_cluster_name" {
   description = "GKE cluster base name"
