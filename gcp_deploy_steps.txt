@@ -57,7 +57,13 @@ gcloud services enable \
   secretmanager.googleapis.com \
   iam.googleapis.com \
   cloudresourcemanager.googleapis.com \
+  servicenetworking.googleapis.com \
   --project=tf-gcp-proj-main
+
+# IMPORTANT: servicenetworking.googleapis.com must be enabled in tf-gcp-proj-main
+# because the terraform service account lives here. Due to a Terraform provider issue,
+# VPC peering operations use the service account's home project as the billing project.
+# See: https://github.com/hashicorp/terraform-provider-google/issues/10066
 
 gcloud services list --enabled --project=tf-gcp-proj-main
 

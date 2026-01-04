@@ -1,0 +1,182 @@
+name: Deploy Application to GKE
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - test
+          - prod
+      image_tag:
+        description: 'Docker image tag (default: git SHA)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: europe-west1-docker.pkg.dev
+  REGISTRY_PROJECT: tf-gcp-proj-main
+  REGISTRY_REPO: petclinic-images
+  IMAGE_NAME: petclinic
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.tag }}
+      image_full: ${{ steps.set-tag.outputs.full }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: set-tag
+        run: |
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            TAG="${{ inputs.image_tag }}"
+          else
+            TAG="${{ github.sha }}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "full=${REGISTRY}/${REGISTRY_PROJECT}/${REGISTRY_REPO}/${IMAGE_NAME}:${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.TERRAFORM_GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }}
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ steps.set-tag.outputs.full }} .
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ steps.set-tag.outputs.full }}
+
+      - name: Tag as latest
+        run: |
+          gcloud artifacts docker tags add \
+            ${{ steps.set-tag.outputs.full }} \
+            ${{ env.REGISTRY }}/${{ env.REGISTRY_PROJECT }}/${{ env.REGISTRY_REPO }}/${{ env.IMAGE_NAME }}:latest
+
+  deploy-to-gke:
+    name: Deploy to GKE (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set environment variables
+        id: set-env
+        run: |
+          if [ "${{ inputs.environment }}" = "test" ]; then
+            echo "project=tf-gcp-proj-test" >> $GITHUB_OUTPUT
+            echo "cluster=gorillaclinic-k8s-gke-test" >> $GITHUB_OUTPUT
+            echo "db_secret=petclinic-db-password-test" >> $GITHUB_OUTPUT
+          else
+            echo "project=tf-gcp-proj-prod" >> $GITHUB_OUTPUT
+            echo "cluster=gorillaclinic-k8s-gke-prod" >> $GITHUB_OUTPUT
+            echo "db_secret=petclinic-db-password-prod" >> $GITHUB_OUTPUT
+          fi
+          echo "region=europe-west1" >> $GITHUB_OUTPUT
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.TERRAFORM_GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install gke-gcloud-auth-plugin
+        run: |
+          gcloud components install gke-gcloud-auth-plugin
+
+      - name: Configure kubectl
+        run: |
+          gcloud container clusters get-credentials ${{ steps.set-env.outputs.cluster }} \
+            --region=${{ steps.set-env.outputs.region }} \
+            --project=${{ steps.set-env.outputs.project }}
+
+      - name: Create/Update database password secret
+        run: |
+          # Delete existing secret if it exists
+          kubectl delete secret db-password --ignore-not-found=true
+
+          # Create secret from Secret Manager
+          kubectl create secret generic db-password \
+            --from-literal=password=$(gcloud secrets versions access latest \
+              --secret=${{ steps.set-env.outputs.db_secret }} \
+              --project=${{ steps.set-env.outputs.project }})
+
+      - name: Update deployment image
+        working-directory: k8s/overlays/${{ inputs.environment }}
+        run: |
+          # Create kustomization patch for image
+          cat >> kustomization.yaml <<EOF
+
+          images:
+            - name: europe-west1-docker.pkg.dev/tf-gcp-proj-main/petclinic-images/petclinic
+              newTag: ${{ needs.build-and-push.outputs.image_tag }}
+          EOF
+
+      - name: Deploy to GKE
+        run: |
+          kubectl apply -k k8s/overlays/${{ inputs.environment }}
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/petclinic --timeout=5m
+
+      - name: Get deployment status
+        run: |
+          echo "### Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ needs.build-and-push.outputs.image_full }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pods:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -l app=petclinic >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Get Gateway IP
+          GATEWAY_IP=$(kubectl get gateway petclinic-gateway -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "Not assigned yet")
+          echo "**Application URL:**" >> $GITHUB_STEP_SUMMARY
+          if [ "$GATEWAY_IP" != "Not assigned yet" ]; then
+            echo "- http://$GATEWAY_IP" >> $GITHUB_STEP_SUMMARY
+            echo "- http://petclinic.$GATEWAY_IP.nip.io" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Gateway IP not assigned yet" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Health check
+        run: |
+          GATEWAY_IP=$(kubectl get gateway petclinic-gateway -o jsonpath='{.status.addresses[0].value}')
+
+          # Wait up to 2 minutes for application to be healthy
+          for i in {1..24}; do
+            if curl -f -s -o /dev/null http://$GATEWAY_IP; then
+              echo "✅ Application is healthy and responding"
+              exit 0
+            fi
+            echo "Waiting for application to be healthy... ($i/24)"
+            sleep 5
+          done
+
+          echo "⚠️ Application health check timed out"
+          exit 1

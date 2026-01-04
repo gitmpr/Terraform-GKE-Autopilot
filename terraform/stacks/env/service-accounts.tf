@@ -19,3 +19,10 @@ resource "google_project_iam_member" "app_secret_accessor" {
   role    = "roles/secretmanager.secretAccessor"
   member  = "serviceAccount:${google_service_account.petclinic_app.email}"
 }
+
+# Workload Identity binding - allows Kubernetes SA to impersonate GCP SA
+resource "google_service_account_iam_member" "workload_identity_binding" {
+  service_account_id = google_service_account.petclinic_app.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.gcp_project_id}.svc.id.goog[default/petclinic]"
+}

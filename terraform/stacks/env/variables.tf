@@ -3,6 +3,12 @@ variable "gcp_project_id" {
   type        = string
 }
 
+variable "main_project_id" {
+  description = "Main GCP project ID (where shared resources like Artifact Registry are located)"
+  type        = string
+  default     = "tf-gcp-proj-main"
+}
+
 variable "gcp_region" {
   description = "GCP region"
   type        = string
