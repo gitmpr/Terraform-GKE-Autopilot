@@ -10,8 +10,8 @@ set -e  # Exit on error
 
 # Configuration
 PROJECT_ID="tf-gcp-proj-main"
-REPO_OWNER="gitmpr"  # TODO: Verify this is correct
-REPO_NAME="private_repo_spring-petclinic"
+REPO_OWNER="gitmpr"
+REPO_NAME="spring-petclinic"
 SA_EMAIL="terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com"
 
 echo "=========================================="
