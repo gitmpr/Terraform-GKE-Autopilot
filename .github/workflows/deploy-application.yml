@@ -123,17 +123,6 @@ jobs:
             --region=${{ steps.set-env.outputs.region }} \
             --project=${{ steps.set-env.outputs.project }}
 
-      - name: Create/Update database password secret
-        run: |
-          # Delete existing secret if it exists
-          kubectl delete secret db-password -n ${{ steps.set-env.outputs.namespace }} --ignore-not-found=true
-
-          # Create secret from Secret Manager
-          kubectl create secret generic db-password -n ${{ steps.set-env.outputs.namespace }} \
-            --from-literal=password=$(gcloud secrets versions access latest \
-              --secret=${{ steps.set-env.outputs.db_secret }} \
-              --project=${{ steps.set-env.outputs.project }})
-
       - name: Update deployment image
         working-directory: k8s/overlays/${{ inputs.environment }}
         run: |
@@ -148,6 +137,17 @@ jobs:
       - name: Deploy to GKE
         run: |
           kubectl apply -k k8s/overlays/${{ inputs.environment }}
+
+      - name: Create/Update database password secret
+        run: |
+          # Delete existing secret if it exists
+          kubectl delete secret db-password -n ${{ steps.set-env.outputs.namespace }} --ignore-not-found=true
+
+          # Create secret from Secret Manager
+          kubectl create secret generic db-password -n ${{ steps.set-env.outputs.namespace }} \
+            --from-literal=password=$(gcloud secrets versions access latest \
+              --secret=${{ steps.set-env.outputs.db_secret }} \
+              --project=${{ steps.set-env.outputs.project }})
 
       - name: Wait for rollout
         run: |

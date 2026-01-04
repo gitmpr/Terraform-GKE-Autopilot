@@ -24,5 +24,5 @@ resource "google_project_iam_member" "app_secret_accessor" {
 resource "google_service_account_iam_member" "workload_identity_binding" {
   service_account_id = google_service_account.petclinic_app.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.gcp_project_id}.svc.id.goog[default/petclinic]"
+  member             = "serviceAccount:${var.gcp_project_id}.svc.id.goog[petclinic-${var.environment}/petclinic]"
 }
