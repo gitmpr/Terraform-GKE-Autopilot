@@ -2,7 +2,6 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: petclinic-gateway
-  namespace: default
 spec:
   gatewayClassName: gke-l7-global-external-managed
   listeners:

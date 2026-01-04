@@ -95,10 +95,12 @@ jobs:
           if [ "${{ inputs.environment }}" = "test" ]; then
             echo "project=tf-gcp-proj-test" >> $GITHUB_OUTPUT
             echo "cluster=gorillaclinic-k8s-gke-test" >> $GITHUB_OUTPUT
+            echo "namespace=petclinic-test" >> $GITHUB_OUTPUT
             echo "db_secret=petclinic-db-password-test" >> $GITHUB_OUTPUT
           else
             echo "project=tf-gcp-proj-prod" >> $GITHUB_OUTPUT
             echo "cluster=gorillaclinic-k8s-gke-prod" >> $GITHUB_OUTPUT
+            echo "namespace=petclinic-prod" >> $GITHUB_OUTPUT
             echo "db_secret=petclinic-db-password-prod" >> $GITHUB_OUTPUT
           fi
           echo "region=europe-west1" >> $GITHUB_OUTPUT
@@ -124,10 +126,10 @@ jobs:
       - name: Create/Update database password secret
         run: |
           # Delete existing secret if it exists
-          kubectl delete secret db-password --ignore-not-found=true
+          kubectl delete secret db-password -n ${{ steps.set-env.outputs.namespace }} --ignore-not-found=true
 
           # Create secret from Secret Manager
-          kubectl create secret generic db-password \
+          kubectl create secret generic db-password -n ${{ steps.set-env.outputs.namespace }} \
             --from-literal=password=$(gcloud secrets versions access latest \
               --secret=${{ steps.set-env.outputs.db_secret }} \
               --project=${{ steps.set-env.outputs.project }})
@@ -149,7 +151,7 @@ jobs:
 
       - name: Wait for rollout
         run: |
-          kubectl rollout status deployment/petclinic --timeout=5m
+          kubectl rollout status deployment/petclinic -n ${{ steps.set-env.outputs.namespace }} --timeout=5m
 
       - name: Get deployment status
         run: |
@@ -160,12 +162,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Pods:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          kubectl get pods -l app=petclinic >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -l app=petclinic -n ${{ steps.set-env.outputs.namespace }} >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Get Gateway IP
-          GATEWAY_IP=$(kubectl get gateway petclinic-gateway -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "Not assigned yet")
+          GATEWAY_IP=$(kubectl get gateway petclinic-gateway -n ${{ steps.set-env.outputs.namespace }} -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "Not assigned yet")
           echo "**Application URL:**" >> $GITHUB_STEP_SUMMARY
           if [ "$GATEWAY_IP" != "Not assigned yet" ]; then
             echo "- http://$GATEWAY_IP" >> $GITHUB_STEP_SUMMARY
@@ -176,17 +178,18 @@ jobs:
 
       - name: Health check
         run: |
-          GATEWAY_IP=$(kubectl get gateway petclinic-gateway -o jsonpath='{.status.addresses[0].value}')
+          GATEWAY_IP=$(kubectl get gateway petclinic-gateway -n ${{ steps.set-env.outputs.namespace }} -o jsonpath='{.status.addresses[0].value}')
 
-          # Wait up to 2 minutes for application to be healthy
-          for i in {1..24}; do
+          # Wait up to 7.5 minutes for application to be healthy
+          # (measured 6 minutes needed, plus 25% buffer)
+          for i in {1..90}; do
             if curl -f -s -o /dev/null http://$GATEWAY_IP; then
-              echo "✅ Application is healthy and responding"
+              echo "Application is healthy and responding"
               exit 0
             fi
-            echo "Waiting for application to be healthy... ($i/24)"
+            echo "Waiting for application to be healthy... ($i/90)"
             sleep 5
           done
 
-          echo "⚠️ Application health check timed out"
+          echo "Application health check timed out"
           exit 1
