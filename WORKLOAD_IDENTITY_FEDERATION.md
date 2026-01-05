@@ -24,7 +24,7 @@ Access to GCP Resources
 - **Pool:** `github-actions` (in `tf-gcp-proj-main` project)
 - **Provider ID:** `github-provider`
 - **Service Account:** `terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com`
-- **Scope:** Repository-specific (only workflows from `gitmpr/spring-petclinic`)
+- **Scope:** Repository-specific (only workflows from `gitmpr/Terraform-GKE-Autopilot`)
 
 ## Security Benefits
 
@@ -71,7 +71,7 @@ Access to GCP Resources
 GitHub OIDC tokens include these claims (mapped in WIF provider):
 
 - `sub` (subject): `repo:OWNER/REPO:ref:refs/heads/BRANCH`
-- `repository`: Full repo name (`gitmpr/spring-petclinic`)
+- `repository`: Full repo name (`gitmpr/Terraform-GKE-Autopilot`)
 - `repository_owner`: Repository owner (`gitmpr`)
 - `actor`: GitHub username who triggered the workflow
 - `workflow`: Workflow file name
@@ -103,7 +103,7 @@ The service account has this IAM binding:
 
 ```yaml
 role: roles/iam.workloadIdentityUser
-member: principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions/attribute.repository/gitmpr/spring-petclinic
+member: principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions/attribute.repository/gitmpr/Terraform-GKE-Autopilot
 ```
 
 This allows only workflows from the specific repository to impersonate the service account.
@@ -205,7 +205,7 @@ gcloud iam service-accounts get-iam-policy \
 
 Expected output should show:
 - Role: `roles/iam.workloadIdentityUser`
-- Member: `principalSet://iam.googleapis.com/projects/.../attribute.repository/gitmpr/spring-petclinic`
+- Member: `principalSet://iam.googleapis.com/projects/.../attribute.repository/gitmpr/Terraform-GKE-Autopilot`
 
 ### Test Authentication in Workflow
 
@@ -250,7 +250,7 @@ gcloud iam service-accounts add-iam-policy-binding \
   terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com \
   --project=tf-gcp-proj-main \
   --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-actions/attribute.repository/gitmpr/spring-petclinic"
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-actions/attribute.repository/gitmpr/Terraform-GKE-Autopilot"
 ```
 
 ### Authentication Fails with "Attribute condition not met"
@@ -258,7 +258,7 @@ gcloud iam service-accounts add-iam-policy-binding \
 **Cause:** Workflow is running from a fork or different repository owner
 
 **Solution:**
-- Ensure the workflow runs from the main repository (`gitmpr/spring-petclinic`), not a fork
+- Ensure the workflow runs from the main repository (`gitmpr/Terraform-GKE-Autopilot`), not a fork
 - If the repository owner changed, update the attribute condition in the WIF provider
 
 ### Workflow Fails with "id-token: write permission required"

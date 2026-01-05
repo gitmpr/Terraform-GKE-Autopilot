@@ -20,9 +20,10 @@ Each environment has:
 Host multiple lower environments (dev, test, sta, acc) on a single shared GKE cluster, while keeping production isolated.
 
 **Example naming:**
-- Cluster: `gorillaclinic-k8s-gke-nonprod` (or `dta` for "diverse test automation")
-- Namespaces: `petclinic-dev`, `petclinic-test`, `petclinic-sta`, `petclinic-acc`
-- Production: `gorillaclinic-k8s-gke-prod` with `petclinic-prod` namespace
+- Non-prod cluster: `gorillaclinic-k8s-gke-nonprod` or `gorillaclinic-k8s-gke-dta` (development, test, acceptance)
+  - Namespaces: `petclinic-dev`, `petclinic-test`, `petclinic-acc`
+- Prod cluster: `gorillaclinic-k8s-gke-prod`
+  - Namespace: `petclinic-prod`
 
 ### Benefits
 

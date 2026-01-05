@@ -1,4 +1,4 @@
-GCP deployment steps for spring-petclinic
+GCP deployment steps for petclinic on GKE
 multi-project setup with terraform stacks and GKE Autopilot
 
 projects:

@@ -11,7 +11,7 @@ set -e  # Exit on error
 # Configuration
 PROJECT_ID="tf-gcp-proj-main"
 REPO_OWNER="gitmpr"
-REPO_NAME="spring-petclinic"
+REPO_NAME="Terraform-GKE-Autopilot"
 SA_EMAIL="terraform-sa@tf-gcp-proj-main.iam.gserviceaccount.com"
 
 echo "=========================================="
