@@ -30,7 +30,7 @@ env:
 
 jobs:
   terraform-deploy:
-    name: Terraform ${{ inputs.plan_only && 'Plan' || 'Apply' }} - ${{ inputs.stack }}${{ inputs.stack == 'env' && format(' ({0})', inputs.environment) || '' }}
+    name: Terraform ${{ inputs.plan_only && 'Plan (review only)' || 'Apply (making changes)' }} - ${{ inputs.stack }}${{ inputs.stack == 'env' && format(' ({0})', inputs.environment) || '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
