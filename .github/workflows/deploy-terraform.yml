@@ -8,11 +8,12 @@ on:
         required: true
         type: choice
         options:
-          - shared
           - env
+          - shared
+        default: env
       environment:
         description: 'Environment (only for env stack)'
-        required: false
+        required: true
         type: choice
         options:
           - test
@@ -42,9 +43,14 @@ jobs:
 
       - name: Validate inputs
         run: |
-          if [ "${{ inputs.stack }}" = "env" ] && [ -z "${{ inputs.environment }}" ]; then
-            echo "ERROR: Environment must be specified for env stack"
-            exit 1
+          if [ "${{ inputs.stack }}" = "env" ]; then
+            if [ -z "${{ inputs.environment }}" ]; then
+              echo "ERROR: Environment must be specified for env stack"
+              exit 1
+            fi
+            echo "Stack: env, Environment: ${{ inputs.environment }}"
+          else
+            echo "Stack: shared (no environment needed)"
           fi
 
       - name: Set environment variables
@@ -92,7 +98,8 @@ jobs:
       - name: Terraform Init
         working-directory: ${{ steps.set-env.outputs.working_dir }}
         run: |
-          terraform init
+          # Initialize without hardcoded credentials - use GOOGLE_APPLICATION_CREDENTIALS from OIDC
+          terraform init -backend-config="credentials="
 
       - name: Terraform Workspace
         if: inputs.stack == 'env'
