@@ -38,6 +38,69 @@ This directory contains CI/CD workflows for the PetClinic application.
 - Deploy specific version to prod: Run with `environment=prod`, `image_tag=abc123`
 - Rollback: Run with `environment=prod`, `image_tag=<previous-working-sha>`
 
+### Deploy Terraform Infrastructure (`deploy-terraform.yml`)
+
+**Trigger:** Manual only (workflow_dispatch)
+
+**Purpose:** Deploy or plan Terraform infrastructure changes for shared resources or environment-specific stacks.
+
+**Inputs:**
+- `stack` (required): Choose `shared` (Artifact Registry) or `env` (GKE, Cloud SQL, networking)
+- `environment` (conditional): Choose `test` or `prod` (required when stack is `env`)
+- `plan_only` (required): When `true`, shows plan without applying changes (default: `true`)
+
+**What it does:**
+1. Authenticates to GCP using OIDC (same as application deployment)
+2. Initializes Terraform with remote state in GCS
+3. Selects/creates appropriate Terraform workspace (for env stack)
+4. Validates Terraform configuration
+5. Generates Terraform plan
+6. Shows plan summary in GitHub Actions summary
+7. If `plan_only=false`: Applies the changes
+8. If `plan_only=true`: Uploads plan artifact for review (30 day retention)
+
+**How to use:**
+
+**Scenario 1: Review changes before applying (RECOMMENDED)**
+1. Go to Actions tab in GitHub
+2. Select "Deploy Terraform Infrastructure" workflow
+3. Click "Run workflow"
+4. Choose stack (`shared` or `env`)
+5. If env stack, choose environment (`test` or `prod`)
+6. Keep "Plan only" checked (`true`)
+7. Click "Run workflow"
+8. Review the plan in the Actions summary
+9. If changes look good, run again with "Plan only" unchecked
+
+**Scenario 2: Apply changes directly**
+1. Follow steps 1-5 above
+2. Uncheck "Plan only" (`false`)
+3. Click "Run workflow"
+
+**Example scenarios:**
+- Plan shared infrastructure changes: `stack=shared`, `plan_only=true`
+- Apply shared infrastructure: `stack=shared`, `plan_only=false`
+- Plan test environment changes: `stack=env`, `environment=test`, `plan_only=true`
+- Apply prod environment changes: `stack=env`, `environment=prod`, `plan_only=false`
+
+**Terraform Workspaces:**
+- `shared` stack: Uses default workspace
+- `env` stack: Uses environment-specific workspaces (`test` or `prod`)
+
+**State Storage:**
+- Backend: Google Cloud Storage
+- Bucket: `gs://tf-gcp-proj-main-tfstate`
+- Paths:
+  - Shared: `shared/default.tfstate`
+  - Test: `env/env:test/default.tfstate`
+  - Prod: `env/env:prod/default.tfstate`
+
+**Safety Features:**
+- Plan-only mode enabled by default
+- Plan artifacts saved for review
+- Separate workspaces per environment
+- OIDC authentication (no stored credentials)
+
 ### Deploy to Cloud Run (`deploy-cloud-run.yml`) - DEPRECATED
 
 **Status:** Non-functional after OIDC migration (2026-01-04)

@@ -1,0 +1,182 @@
+name: Deploy Terraform Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: 'Terraform stack to deploy'
+        required: true
+        type: choice
+        options:
+          - shared
+          - env
+      environment:
+        description: 'Environment (only for env stack)'
+        required: false
+        type: choice
+        options:
+          - test
+          - prod
+        default: test
+      plan_only:
+        description: 'Plan only (do not apply)'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  TF_VERSION: '1.5'
+
+jobs:
+  terraform-deploy:
+    name: Terraform ${{ inputs.plan_only && 'Plan' || 'Apply' }} - ${{ inputs.stack }}${{ inputs.stack == 'env' && format(' ({0})', inputs.environment) || '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC authentication
+      pull-requests: write  # For PR comments (future enhancement)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        run: |
+          if [ "${{ inputs.stack }}" = "env" ] && [ -z "${{ inputs.environment }}" ]; then
+            echo "ERROR: Environment must be specified for env stack"
+            exit 1
+          fi
+
+      - name: Set environment variables
+        id: set-env
+        run: |
+          STACK="${{ inputs.stack }}"
+
+          if [ "$STACK" = "shared" ]; then
+            PROJECT="tf-gcp-proj-main"
+            WORKING_DIR="terraform/stacks/shared"
+            TFVARS_FILE=""
+            WORKSPACE=""
+          else
+            ENVIRONMENT="${{ inputs.environment }}"
+            if [ "$ENVIRONMENT" = "test" ]; then
+              PROJECT="tf-gcp-proj-test"
+            else
+              PROJECT="tf-gcp-proj-prod"
+            fi
+            WORKING_DIR="terraform/stacks/env"
+            TFVARS_FILE="env.d/${ENVIRONMENT}.tfvars"
+            WORKSPACE="$ENVIRONMENT"
+          fi
+
+          echo "project=${PROJECT}" >> $GITHUB_OUTPUT
+          echo "working_dir=${WORKING_DIR}" >> $GITHUB_OUTPUT
+          echo "tfvars_file=${TFVARS_FILE}" >> $GITHUB_OUTPUT
+          echo "workspace=${WORKSPACE}" >> $GITHUB_OUTPUT
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: ${{ steps.set-env.outputs.working_dir }}
+        run: |
+          terraform init
+
+      - name: Terraform Workspace
+        if: inputs.stack == 'env'
+        working-directory: ${{ steps.set-env.outputs.working_dir }}
+        run: |
+          # Create workspace if it doesn't exist, otherwise select it
+          terraform workspace select ${{ steps.set-env.outputs.workspace }} || \
+            terraform workspace new ${{ steps.set-env.outputs.workspace }}
+
+      - name: Terraform Validate
+        working-directory: ${{ steps.set-env.outputs.working_dir }}
+        run: |
+          terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ steps.set-env.outputs.working_dir }}
+        run: |
+          if [ "${{ inputs.stack }}" = "shared" ]; then
+            terraform plan -out=tfplan
+          else
+            terraform plan -var-file="${{ steps.set-env.outputs.tfvars_file }}" -out=tfplan
+          fi
+
+      - name: Show Plan Summary
+        working-directory: ${{ steps.set-env.outputs.working_dir }}
+        run: |
+          echo "### Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Stack:** ${{ inputs.stack }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.stack }}" = "env" ]; then
+            echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Workspace:** ${{ steps.set-env.outputs.workspace }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "**Project:** ${{ steps.set-env.outputs.project }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Plan Only:** ${{ inputs.plan_only }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          terraform show -no-color tfplan | grep -A 1000 "Terraform will perform" | head -50 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Terraform Apply
+        if: inputs.plan_only == false
+        working-directory: ${{ steps.set-env.outputs.working_dir }}
+        run: |
+          terraform apply -auto-approve tfplan
+
+      - name: Show Apply Results
+        if: inputs.plan_only == false
+        working-directory: ${{ steps.set-env.outputs.working_dir }}
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Terraform Apply Completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Infrastructure has been successfully updated." >> $GITHUB_STEP_SUMMARY
+
+          # Show outputs if they exist
+          if terraform output &>/dev/null; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Outputs:**" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            terraform output >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Plan Only Notice
+        if: inputs.plan_only == true
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Plan Only Mode" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No changes were applied. To apply these changes, run the workflow again with 'Plan only' set to false." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Plan Artifact
+        if: inputs.plan_only == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ inputs.stack }}-${{ inputs.stack == 'env' && inputs.environment || 'main' }}-${{ github.run_number }}
+          path: ${{ steps.set-env.outputs.working_dir }}/tfplan
+          retention-days: 30
+
+      - name: Cleanup
+        if: always()
+        working-directory: ${{ steps.set-env.outputs.working_dir }}
+        run: |
+          # Remove plan file to avoid accidentally applying it later
+          rm -f tfplan
